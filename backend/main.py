@@ -26,6 +26,21 @@ Every array item MUST be an object with exactly these keys:
 
 Return [] when no actionable issue is found. Never invent line numbers."""
 
+RESPONSE_SCHEMA = {
+    "type": "array",
+    "items": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["line_number", "issue_type", "description", "suggested_refactor"],
+        "properties": {
+            "line_number": {"type": "integer", "minimum": 1},
+            "issue_type": {"type": "string", "enum": ["vulnerability", "complexity"]},
+            "description": {"type": "string"},
+            "suggested_refactor": {"type": "string"},
+        },
+    },
+}
+
 
 class AnalyzeRequest(BaseModel):
     code: str
@@ -76,7 +91,7 @@ async def analyze_with_ollama(code: str, language: str) -> list[dict[str, Any]]:
         "system": SYSTEM_PROMPT,
         "prompt": f"Language: {language}\n\nSource code:\n```{language}\n{code}\n```",
         "stream": False,
-        "format": "json",
+        "format": RESPONSE_SCHEMA,
     }
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:
