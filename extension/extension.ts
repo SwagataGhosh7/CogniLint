@@ -12,6 +12,22 @@ interface AnalysisIssue {
   suggested_refactor: string;
 }
 
+function isAnalysisIssue(value: unknown): value is AnalysisIssue {
+  if (typeof value !== "object" || value === null) {
+    return false;
+  }
+
+  const issue = value as Record<string, unknown>;
+  return (
+    typeof issue.line_number === "number" &&
+    Number.isInteger(issue.line_number) &&
+    issue.line_number >= 1 &&
+    (issue.issue_type === "vulnerability" || issue.issue_type === "complexity") &&
+    typeof issue.description === "string" &&
+    typeof issue.suggested_refactor === "string"
+  );
+}
+
 function scheduleAnalysis(document: vscode.TextDocument): void {
   const key = document.uri.toString();
   const previousTimer = timers.get(key);
@@ -33,6 +49,8 @@ async function analyzeDocument(document: vscode.TextDocument): Promise<void> {
     return;
   }
 
+  const documentVersion = document.version;
+
   try {
     const response = await fetch(BACKEND_URL, {
       method: "POST",
@@ -47,15 +65,18 @@ async function analyzeDocument(document: vscode.TextDocument): Promise<void> {
       throw new Error(`Backend returned HTTP ${response.status}`);
     }
 
-    const issues = (await response.json()) as AnalysisIssue[];
+    const responseBody: unknown = await response.json();
+    if (!Array.isArray(responseBody) || !responseBody.every(isAnalysisIssue)) {
+      throw new Error("Backend returned an invalid analysis response");
+    }
+
+    if (document.isClosed || document.version !== documentVersion) {
+      return;
+    }
+
+    const issues = responseBody;
     const documentDiagnostics = issues
-      .filter(
-        (issue) =>
-          Number.isInteger(issue.line_number) &&
-          issue.line_number >= 1 &&
-          issue.line_number <= document.lineCount &&
-          typeof issue.description === "string",
-      )
+      .filter((issue) => issue.line_number <= document.lineCount)
       .map((issue) => {
         const line = issue.line_number - 1;
         const range = document.lineAt(line).range;
