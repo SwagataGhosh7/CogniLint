@@ -1,0 +1,50 @@
+{
+  "name": "cognilint",
+  "displayName": "CogniLint",
+  "description": "Local AI code vulnerability and complexity analyzer.",
+  "version": "0.0.1",
+  "publisher": "cognilint",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Linters",
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "cognilint.analyzeDocument",
+        "title": "CogniLint: Analyze Document"
+      }
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "cognilint.analyzeDocument"
+        }
+      ],
+      "editor/context": [
+        {
+          "command": "cognilint.analyzeDocument",
+          "when": "editorTextFocus",
+          "group": "navigation@cognilint"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "typescript": "^5.0.0"
+  }
+}
