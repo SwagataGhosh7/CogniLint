@@ -3,15 +3,26 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from typing import Any, Literal
 
 import httpx
+from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
+load_dotenv()
+
 OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "gemma4:e4b"
+OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "45"))
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_URL = (
+    "https://generativelanguage.googleapis.com/v1beta/models/"
+    f"{GEMINI_MODEL}:generateContent"
+)
 
 SYSTEM_PROMPT = """You are CogniLint, a precise code security and complexity analyzer.
 Analyze the supplied source code for real security vulnerabilities and high cyclomatic
@@ -94,7 +105,7 @@ async def analyze_with_ollama(code: str, language: str) -> list[dict[str, Any]]:
         "format": RESPONSE_SCHEMA,
     }
     try:
-        async with httpx.AsyncClient(timeout=120.0) as client:
+        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT_SECONDS) as client:
             result = await client.post(OLLAMA_URL, json=payload)
             result.raise_for_status()
             body = result.json()
@@ -110,9 +121,60 @@ async def analyze_with_ollama(code: str, language: str) -> list[dict[str, Any]]:
         raise RuntimeError(str(exc)) from exc
 
 
+async def analyze_with_gemini(code: str, language: str) -> list[dict[str, Any]]:
+    """Use Gemini as a remote fallback when explicitly configured."""
+    if not GEMINI_API_KEY:
+        raise RuntimeError("GEMINI_API_KEY is not configured")
+
+    payload = {
+        "systemInstruction": {"parts": [{"text": SYSTEM_PROMPT}]},
+        "contents": [
+            {
+                "parts": [
+                    {
+                        "text": (
+                            f"Language: {language}\n\nSource code:\n"
+                            f"```{language}\n{code}\n```"
+                        )
+                    }
+                ]
+            }
+        ],
+        "generationConfig": {"responseMimeType": "application/json", "responseSchema": RESPONSE_SCHEMA},
+    }
+    try:
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            result = await client.post(
+                GEMINI_URL,
+                headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY},
+                json=payload,
+            )
+            result.raise_for_status()
+            body = result.json()
+    except (httpx.HTTPError, ValueError) as exc:
+        raise RuntimeError("Unable to reach or decode the Gemini response") from exc
+
+    try:
+        response_text = body["candidates"][0]["content"]["parts"][0]["text"]
+    except (KeyError, IndexError, TypeError) as exc:
+        raise RuntimeError("Gemini response did not contain text") from exc
+    try:
+        return sanitize_model_response(response_text)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
 @app.post("/analyze-code", response_model=list[AnalysisIssue])
 async def analyze_code(request: AnalyzeRequest) -> list[dict[str, Any]]:
     try:
         return await analyze_with_ollama(request.code, request.language)
-    except RuntimeError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except RuntimeError as ollama_error:
+        if not GEMINI_API_KEY:
+            raise HTTPException(status_code=502, detail=str(ollama_error)) from ollama_error
+        try:
+            return await analyze_with_gemini(request.code, request.language)
+        except RuntimeError as gemini_error:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Ollama failed: {ollama_error}; Gemini fallback failed: {gemini_error}",
+            ) from gemini_error

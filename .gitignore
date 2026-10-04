@@ -1,0 +1,16 @@
+# Local secrets and environment configuration
+.env
+.env.*
+!.env.example
+backend/.env
+backend/.env.*
+!backend/.env.example
+
+# Python local files
+__pycache__/
+*.py[cod]
+.venv/
+
+# VS Code extension build/dependency output
+extension/node_modules/
+extension/out/
