@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import asyncio
 from typing import Any, Literal
 
 import httpx
@@ -18,7 +19,7 @@ OLLAMA_URL = "http://localhost:11434/api/generate"
 OLLAMA_MODEL = "gemma4:e4b"
 OLLAMA_TIMEOUT_SECONDS = float(os.getenv("OLLAMA_TIMEOUT_SECONDS", "45"))
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.8-flash")
 GEMINI_URL = (
     "https://generativelanguage.googleapis.com/v1beta/models/"
     f"{GEMINI_MODEL}:generateContent"
@@ -41,7 +42,6 @@ RESPONSE_SCHEMA = {
     "type": "array",
     "items": {
         "type": "object",
-        "additionalProperties": False,
         "required": ["line_number", "issue_type", "description", "suggested_refactor"],
         "properties": {
             "line_number": {"type": "integer", "minimum": 1},
@@ -103,6 +103,7 @@ async def analyze_with_ollama(code: str, language: str) -> list[dict[str, Any]]:
         "prompt": f"Language: {language}\n\nSource code:\n```{language}\n{code}\n```",
         "stream": False,
         "format": RESPONSE_SCHEMA,
+        "think": False,
     }
     try:
         async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT_SECONDS) as client:
@@ -144,13 +145,17 @@ async def analyze_with_gemini(code: str, language: str) -> list[dict[str, Any]]:
     }
     try:
         async with httpx.AsyncClient(timeout=60.0) as client:
-            result = await client.post(
-                GEMINI_URL,
-                headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY},
-                json=payload,
-            )
-            result.raise_for_status()
-            body = result.json()
+            for attempt in range(2):
+                result = await client.post(
+                    GEMINI_URL,
+                    headers={"Content-Type": "application/json", "x-goog-api-key": GEMINI_API_KEY},
+                    json=payload,
+                )
+                if result.status_code != 503 or attempt == 1:
+                    result.raise_for_status()
+                    body = result.json()
+                    break
+                await asyncio.sleep(2)
     except (httpx.HTTPError, ValueError) as exc:
         raise RuntimeError("Unable to reach or decode the Gemini response") from exc
 
