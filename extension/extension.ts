@@ -28,6 +28,21 @@ function isAnalysisIssue(value: unknown): value is AnalysisIssue {
   );
 }
 
+function getSafeReplacement(document: vscode.TextDocument, diagnostic: vscode.Diagnostic): string | undefined {
+  if (typeof diagnostic.code !== "string" || diagnostic.code.trim().length === 0) {
+    return undefined;
+  }
+
+  const suggestion = diagnostic.code.trim();
+  if (suggestion.includes("\n") || suggestion.includes("\r")) {
+    return undefined;
+  }
+
+  const sourceLine = document.lineAt(diagnostic.range.start.line).text;
+  const indentation = sourceLine.match(/^\s*/)?.[0] ?? "";
+  return `${indentation}${suggestion}`;
+}
+
 function scheduleAnalysis(document: vscode.TextDocument): void {
   const key = document.uri.toString();
   const previousTimer = timers.get(key);
@@ -104,8 +119,13 @@ class RefactorCodeActionProvider implements vscode.CodeActionProvider {
     context: vscode.CodeActionContext,
   ): vscode.CodeAction[] {
     return context.diagnostics
-      .filter((diagnostic) => diagnostic.source === "CogniLint" && typeof diagnostic.code === "string")
+      .filter((diagnostic) => diagnostic.source === "CogniLint")
       .map((diagnostic) => {
+        const replacement = getSafeReplacement(document, diagnostic);
+        if (!replacement) {
+          return undefined;
+        }
+
         const action = new vscode.CodeAction(
           "CogniLint: Apply suggested refactor",
           vscode.CodeActionKind.QuickFix,
@@ -113,9 +133,10 @@ class RefactorCodeActionProvider implements vscode.CodeActionProvider {
         action.diagnostics = [diagnostic];
         action.isPreferred = true;
         action.edit = new vscode.WorkspaceEdit();
-        action.edit.replace(document.uri, diagnostic.range, diagnostic.code as string);
+        action.edit.replace(document.uri, diagnostic.range, replacement);
         return action;
-      });
+      })
+      .filter((action): action is vscode.CodeAction => action !== undefined);
   }
 }
 
